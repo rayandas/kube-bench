@@ -56,6 +56,8 @@ const (
 	// POLICIES a node to run policies from
 	POLICIES NodeType = "policies"
 
+	MANAGEDSERVICES = "managedservices"
+
 	// MANUAL Check Type
 	MANUAL string = "manual"
 )

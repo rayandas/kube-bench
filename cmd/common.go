@@ -20,7 +20,10 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"encoding/json"
 	"strings"
+	"sort"
+	"strconv"
 
 	"github.com/aquasecurity/kube-bench/check"
 	"github.com/golang/glog"
@@ -210,7 +213,7 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 // loadConfig finds the correct config dir based on the kubernetes version,
 // merges any specific config.yaml file found with the main config
 // and returns the benchmark file to use.
-func loadConfig(nodetype check.NodeType) string {
+func loadConfig(nodetype check.NodeType, benchmarkVersion string) string {
 	var file string
 	var err error
 
@@ -225,12 +228,14 @@ func loadConfig(nodetype check.NodeType) string {
 		file = etcdFile
 	case check.POLICIES:
 		file = policiesFile
+	case check.MANAGEDSERVICES:
+		file = managedservicesFile
 	}
 
-	benchmarkVersion, err := getBenchmarkVersion(kubeVersion, benchmarkVersion, viper.GetViper())
-	if err != nil {
-		exitWithError(fmt.Errorf("failed to get benchMark version: %v", err))
-	}
+//	benchmarkVersion, err := getBenchmarkVersion(kubeVersion, benchmarkVersion, viper.GetViper())
+//	if err != nil {
+//		exitWithError(fmt.Errorf("failed to get benchMark version: %v", err))
+//	}
 
 	path, err := getConfigFilePath(benchmarkVersion, file)
 	if err != nil {
@@ -287,6 +292,15 @@ func loadVersionMapping(v *viper.Viper) (map[string]string, error) {
 	return kubeToBenchmarkMap, nil
 }
 
+func loadTargetMapping(v *viper.Viper) (map[string][]string, error) {
+	benchmarkVersionToTargetsMap := v.GetStringMapStringSlice("target_mapping")
+	if len(benchmarkVersionToTargetsMap) == 0 {
+		return nil, fmt.Errorf("config file is missing 'target_mapping' section")
+	}
+
+	return benchmarkVersionToTargetsMap, nil
+}
+
 func getBenchmarkVersion(kubeVersion, benchmarkVersion string, v *viper.Viper) (bv string, err error) {
 	if !isEmpty(kubeVersion) && !isEmpty(benchmarkVersion) {
 		return "", fmt.Errorf("It is an error to specify both --version and --benchmark flags")
@@ -319,7 +333,7 @@ func getBenchmarkVersion(kubeVersion, benchmarkVersion string, v *viper.Viper) (
 
 // isMaster verify if master components are running on the node.
 func isMaster() bool {
-	loadConfig(check.MASTER)
+//	loadConfig(check.MASTER)
 	return isThisNodeRunning(check.MASTER)
 }
 
@@ -347,6 +361,62 @@ func isThisNodeRunning(nodeType check.NodeType) bool {
 	}
 
 	return true
+}
+
+func writeOutput(controlsCollection []*check.Controls) {
+	sort.Slice(controlsCollection, func(i, j int) bool {
+		iid, _ := strconv.Atoi(controlsCollection[i].ID)
+		jid, _ := strconv.Atoi(controlsCollection[j].ID)
+		return iid < jid
+	})
+	if junitFmt {
+		writeJunitOutput(controlsCollection)
+		return
+	}
+	if jsonFmt {
+		writeJsonOutput(controlsCollection)
+		return
+	}
+	if pgSQL {
+		writePgsqlOutput(controlsCollection)
+		return
+	}
+	writeStdoutOutput(controlsCollection)
+}
+
+func writeJsonOutput(controlsCollection []*check.Controls) {
+	out, err := json.Marshal(controlsCollection)
+	if err != nil {
+		exitWithError(fmt.Errorf("failed to output in JSON format: %v", err))
+	}
+	PrintOutput(string(out), outputFile)
+}
+
+func writeJunitOutput(controlsCollection []*check.Controls) {
+	for _, controls := range controlsCollection {
+		out, err := controls.JUnit()
+		if err != nil {
+			exitWithError(fmt.Errorf("failed to output in JUnit format: %v", err))
+		}
+		PrintOutput(string(out), outputFile)
+	}
+}
+
+func writePgsqlOutput(controlsCollection []*check.Controls) {
+	for _, controls := range controlsCollection {
+		out, err := controls.JSON()
+		if err != nil {
+			exitWithError(fmt.Errorf("failed to output in Postgresql format: %v", err))
+		}
+		savePgsql(string(out))
+	}
+}
+
+func writeStdoutOutput(controlsCollection []*check.Controls) {
+	for _, controls := range controlsCollection {
+		summary := controls.Summary
+		prettyPrint(controls, summary)
+	}
 }
 
 func printRawOutput(output string) {
@@ -382,14 +452,21 @@ var benchmarkVersionToTargetsMap = map[string][]string{
 	"cis-1.3": []string{string(check.MASTER), string(check.NODE)},
 	"cis-1.4": []string{string(check.MASTER), string(check.NODE)},
 	"cis-1.5": []string{string(check.MASTER), string(check.NODE), string(check.CONTROLPLANE), string(check.ETCD), string(check.POLICIES)},
-}
+	"gke-1.0": []string{string(check.MASTER), string(check.NODE), string(check.CONTROLPLANE), string(check.ETCD), string(check.POLICIES), string(check.MANAGEDSERVICES)},
+	"eks-1.0": []string{string(check.MASTER), string(check.NODE), string(check.CONTROLPLANE), string(check.POLICIES), string(check.MANAGEDSERVICES)},
+} 
+
 
 // validTargets helps determine if the targets
 // are legitimate for the benchmarkVersion.
-func validTargets(benchmarkVersion string, targets []string) bool {
+func validTargets(benchmarkVersion string, targets []string, v *viper.Viper) (bool, error) {
+	benchmarkVersionToTargetsMap, err := loadTargetMapping(v)
+	if err != nil {
+		return false, err
+	}
 	providedTargets, found := benchmarkVersionToTargetsMap[benchmarkVersion]
 	if !found {
-		return false
+		return false, nil
 	}
 
 	for _, pt := range targets {
@@ -402,9 +479,9 @@ func validTargets(benchmarkVersion string, targets []string) bool {
 		}
 
 		if !f {
-			return false
+			return false, nil
 		}
 	}
 
-	return true
+	return true, nil
 }

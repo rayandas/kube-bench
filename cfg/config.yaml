@@ -173,3 +173,20 @@ version_mapping:
   "1.17": "cis-1.5"
   "ocp-3.10": "rh-0.7"
   "ocp-3.11": "rh-0.7"
+
+target_mapping:
+  "cis-1.3":
+    - "master"
+    - "node"
+  "cis-1.4":
+    - "master"
+    - "node"
+  "cis-1.5":
+    - "master"
+    - "node"
+    - "controlplane"
+    - "etcd"
+    - "policies"
+  "rh-0.7":
+    - "master"
+    - "node"
